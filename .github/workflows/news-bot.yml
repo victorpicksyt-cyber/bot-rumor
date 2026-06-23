@@ -1,0 +1,43 @@
+name: rumor-bot
+
+on:
+  repository_dispatch:
+    types: [run-bot]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */3 * * *"   # هر ۳ ساعت (پشتیبان؛ تریگرِ اصلی از cron-job.org)
+
+permissions:
+  contents: write
+  models: read
+
+concurrency:
+  group: rumor-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+        run: python news_bot.py
+
+      - name: Commit state
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add seen.json || true
+          git commit -m "update seen.json" || echo "no changes"
+          git push || echo "nothing to push"
