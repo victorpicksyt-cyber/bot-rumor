@@ -39,7 +39,7 @@ STATE_FILE = "seen.json"
 TEHRAN     = timezone(timedelta(hours=3, minutes=30))
 TG_API     = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 UA         = {"User-Agent": "Mozilla/5.0 (compatible; RadioBulletinBot/1.0)"}
-MAX_MEDIA_BYTES = 45 * 1024 * 1024     # سقفِ حجمِ مدیا (تلگرام تا ۵۰ مگ)
+MAX_MEDIA_BYTES = 49 * 1024 * 1024     # سقفِ واقعیِ Bot API تلگرام ۵۰ مگ است؛ تا همان حد استفاده می‌کنیم
 
 FACTCHECK_HINTS = ("نادرست", "گمراه‌کننده", "شاخ‌دار", "نیمه‌درست", "بی‌اساس",
                    "جعلی", "ساختگی", "شایعه", "ادعا", "❌", "❓",
@@ -129,10 +129,12 @@ def ai_rewrite(text):
         "it is a rumor. It MUST start with «⚠️ شایعه:». Under 120 characters. Never present "
         "the claim as true.\n"
         "WHY: 1 to 3 short lines explaining the reality and why the claim is wrong or "
-        "misleading, then a final line «🔖 حکم فکت‌نامه:» followed by the verdict found in the "
-        "post (نادرست / گمراه‌کننده / شاخ‌دار / نیمه‌درست / بی‌اساس) or the closest accurate one.\n"
-        "RULES: Paraphrase in your own words; do NOT copy sentences verbatim. Calm, clear, "
-        "colloquial. No hashtags. "
+        "misleading, then a final line «🔖 حکم:» followed by the verdict "
+        "(نادرست / گمراه‌کننده / شاخ‌دار / نیمه‌درست / بی‌اساس) or the closest accurate one.\n"
+        "RULES: Paraphrase in your own words; do NOT copy sentences verbatim. "
+        "Do NOT mention or name ANY source, website, organization, channel or fact-checker "
+        "anywhere in the output (no «فکت‌نامه», no links, no «بخوانید»). State the facts in your "
+        "own neutral voice. Calm, clear, colloquial. No hashtags. "
         "If the post is NOT about checking a specific claim (podcast/promo/announcement), "
         "output exactly: SKIP\n"
         "Output only the TITLE/WHY block, or SKIP."
@@ -179,12 +181,10 @@ def parse_title_why(txt):
 
 def build_caption(title, why, item):
     title = html.escape(title.strip())[:300]
-    why = html.escape(why.strip())[:700]
+    why = html.escape(why.strip())[:800]
     out = f"<b>{title}</b>"
     if why:
         out += f"\n\n<blockquote>{why}</blockquote>"
-    link = html.escape(item["link"])
-    out += f"\n\n📌 منبع: {SOURCE_NAME} — <a href=\"{link}\">مشاهده‌ی اصلِ مطلب</a>"
     out += FOOTER
     return out
 
