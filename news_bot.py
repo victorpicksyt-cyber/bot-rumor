@@ -17,7 +17,6 @@ import re
 import sys
 import json
 import html
-import base64
 import subprocess
 import requests
 from io import BytesIO
@@ -212,53 +211,6 @@ def ai_select_and_write(cands):
     return idx, title, why, model
 
 
-def _img_to_b64(raw, max_side=600):
-    try:
-        im = Image.open(BytesIO(raw)).convert("RGB")
-        if max(im.size) > max_side:
-            s = max_side / max(im.size)
-            im = im.resize((int(im.width * s), int(im.height * s)), Image.LANCZOS)
-        buf = BytesIO()
-        im.save(buf, "JPEG", quality=70)
-        return base64.b64encode(buf.getvalue()).decode()
-    except Exception:
-        return None
-
-
-def ai_pick_clean_photo(urls):
-    """عکسی را که واترمارک/لوگو/مهرِ منبع ندارد انتخاب می‌کند. ایندکس یا None."""
-    content = [{"type": "text", "text":
-                "تصاویرِ زیر مربوط به یک خبرِ بررسی‌شده‌اند. کدام تصویر هیچ واترمارک، لوگو، "
-                "نام کانال/سایت، یا مهرِ روی‌نوشته (مثل «قدیمی»/«نادرست») ندارد و تمیزترین و "
-                "مناسب‌ترین برای بنر است؟ فقط شماره‌ی همان تصویر را بده. اگر همه واترمارک/مهر "
-                "دارند، فقط بنویس NONE."}]
-    valid_idx = []
-    for i, u in enumerate(urls[:6]):
-        try:
-            raw = requests.get(u, headers=UA, timeout=30).content
-        except Exception:
-            continue
-        b64 = _img_to_b64(raw)
-        if not b64:
-            continue
-        content.append({"type": "text", "text": f"تصویر شماره {i}:"})
-        content.append({"type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-        valid_idx.append(i)
-    if not valid_idx:
-        return None
-    txt, _ = _call_ai([{"role": "user", "content": content}], temperature=0.2)
-    if not txt:
-        return None
-    if "NONE" in txt.upper():
-        return None
-    mt = re.search(r"\d+", txt)
-    if not mt:
-        return None
-    idx = int(mt.group(0))
-    return idx if idx in valid_idx else None
-
-
 # ===================== کارِ تصویر =====================
 def load_stamp():
     global _STAMP_CACHE
@@ -428,21 +380,17 @@ def publish(title, why, item):
             print("  ⚠️ کارِ ویدیو نشد، متنی می‌فرستم:", e)
         return send_message(caption)
 
-    # --- عکس: نسخه‌ی بی‌واترمارک را انتخاب کن، مهر بزن ---
+    # --- عکس: نسخه‌ی اصل را با مهرِ شایعه بگذار (دست‌نخورده) ---
     if item["photos"]:
-        idx = ai_pick_clean_photo(item["photos"])
-        if idx is not None:
-            try:
-                raw = requests.get(item["photos"][idx], headers=UA, timeout=30).content
-                banner = make_banner(raw, "banner.jpg")
-                print("  🖼 عکسِ بی‌واترمارک انتخاب و مهر خورد.")
-                mid = send_photo(banner, caption)
-                if mid:
-                    return mid
-            except Exception as e:
-                print("  ⚠️ ساختِ بنر نشد، متنی می‌فرستم:", e)
-        else:
-            print("  🚫 عکسِ بی‌واترمارکی نبود → متنی (مورد ۳).")
+        try:
+            raw = requests.get(item["photos"][0], headers=UA, timeout=30).content
+            banner = make_banner(raw, "banner.jpg")
+            print("  🖼 عکسِ اصل با مهرِ شایعه آماده شد.")
+            mid = send_photo(banner, caption)
+            if mid:
+                return mid
+        except Exception as e:
+            print("  ⚠️ ساختِ بنر نشد، متنی می‌فرستم:", e)
         return send_message(caption)
 
     # --- بدونِ مدیا ---
