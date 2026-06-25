@@ -17,6 +17,7 @@ import re
 import sys
 import json
 import html
+import base64
 import subprocess
 import requests
 from io import BytesIO
@@ -168,26 +169,31 @@ def ai_select_and_write(cands):
     listing = "\n\n".join(lines)
     system = (
         "You are the editor of an anti-misinformation Telegram channel writing in COLLOQUIAL "
-        "PERSIAN. You receive several candidate fact-check items; each debunks a rumor "
-        "circulating in Iran.\n"
-        "STEP 1 — Read ALL candidates carefully, then choose the SINGLE most important / most "
-        "serious / most widely-relevant rumor to warn people about.\n"
-        "STEP 2 — Write a fully ORIGINAL alert for it in YOUR OWN words. Do NOT copy the "
-        "original headline or sentences; rephrase freshly and engagingly.\n"
+        "PERSIAN. You receive several candidate fact-check items.\n"
+        "STEP 1 — Read ALL candidates carefully. Choose the SINGLE most important / most serious "
+        "rumor to warn people about. VERY IMPORTANT: only choose an item whose verdict is FALSE, "
+        "misleading, baseless, fabricated, OUTDATED, or a rumor (نادرست / گمراه‌کننده / شاخ‌دار / "
+        "نیمه‌درست / بی‌اساس / قدیمی / جعلی / ساختگی). NEVER choose an item that the fact-check "
+        "confirms as TRUE / correct / verified (درست / تأییدشده) — a confirmed-true item is NOT a "
+        "rumor. If you are not sure an item is actually false/misleading, do not pick it.\n"
+        "STEP 2 — Write a fully ORIGINAL alert for the chosen item in YOUR OWN words. Do NOT copy "
+        "the original headline or sentences; rephrase freshly and engagingly.\n"
         "Output EXACTLY this and nothing else:\n"
         "PICK: the index number (just the digit) of the chosen candidate\n"
-        "TITLE: a Persian headline you write yourself. It MUST start with one of «اخباری که» / "
-        "«ویدیویی که» / «عکسی که» (matching that candidate's media type) and clearly say the "
-        "thing is a rumor and untrue — e.g. «ویدیویی که … شایعه است و واقعیت ندارد». Engaging, "
-        "never a copy. Under 140 characters.\n"
+        "TITLE: a Persian headline you write yourself. Decide intelligently what the rumor IS and "
+        "start with the matching word: if it is a fake/old/misleading VIDEO → «ویدیویی که …»; if "
+        "it is a fake/misleading PHOTO or image → «عکسی که …»; if it is a textual news claim → "
+        "«خبری که …». Then clearly say it is a rumor and untrue — e.g. «ویدیویی که … شایعه است و "
+        "واقعیت ندارد». Engaging, never a copy. Under 140 characters.\n"
         "WHY: in popular, easy, engaging Persian, explain FULLY and clearly why the claim is "
         "false or misleading — cover all the key points, in your own simple words (a few short "
         "lines). End with a final line «🔖 حکم:» followed by the verdict "
-        "(نادرست / گمراه‌کننده / شاخ‌دار / نیمه‌درست / بی‌اساس) or the closest. Keep WHY under 600 chars.\n"
+        "(نادرست / گمراه‌کننده / شاخ‌دار / نیمه‌درست / بی‌اساس / قدیمی) or the closest. Keep WHY under 600 chars.\n"
         "RULES: Never present the rumor as true. Do NOT mention or name ANY source, website, "
         "organization, channel or fact-checker anywhere (no «فکت‌نامه», no links, no «بخوانید»). "
         "Paraphrase; never copy verbatim. No hashtags.\n"
-        "If NONE is a genuine specific-claim fact-check, output exactly: SKIP\n"
+        "If NONE of the candidates is a genuine FALSE/misleading rumor (e.g. all are true or "
+        "none is a specific claim), output exactly: SKIP\n"
         "Output only PICK/TITLE/WHY, or SKIP."
     )
     txt, model = _call_ai([{"role": "system", "content": system},
@@ -212,6 +218,38 @@ def ai_select_and_write(cands):
 
 
 # ===================== کارِ تصویر =====================
+def _img_to_b64(raw, max_side=700):
+    try:
+        im = Image.open(BytesIO(raw)).convert("RGB")
+        if max(im.size) > max_side:
+            s = max_side / max(im.size)
+            im = im.resize((int(im.width * s), int(im.height * s)), Image.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, "JPEG", quality=75)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
+def looks_true_in_image(photo_url):
+    """اگر روی تصویر آشکارا «درست/تأییدشده» خورده باشد True (یعنی شایعه نیست و نباید پخش شود)."""
+    try:
+        raw = requests.get(photo_url, headers=UA, timeout=30).content
+    except Exception:
+        return False
+    b64 = _img_to_b64(raw)
+    if not b64:
+        return False
+    content = [
+        {"type": "text", "text":
+         "این تصویر مربوط به یک خبرِ راستی‌آزمایی‌شده است. فقط به برچسب/مهرِ حکمِ روی تصویر نگاه کن. "
+         "اگر آشکارا نشان می‌دهد خبر «درست» یا «تأییدشده» است (یعنی شایعه و نادرست نیست)، فقط بنویس TRUE. "
+         "اگر حکم نادرست/گمراه‌کننده/قدیمی/جعلی/شایعه است یا نامشخص است، فقط بنویس RUMOR."},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]
+    txt, _ = _call_ai([{"role": "user", "content": content}], temperature=0.0)
+    return bool(txt) and "TRUE" in txt.upper() and "RUMOR" not in txt.upper()
+
 def load_stamp():
     global _STAMP_CACHE
     if _STAMP_CACHE is not None:
@@ -456,6 +494,15 @@ def main():
     chosen = cands[idx]
     mode = "ویدیو" if chosen["videos"] else ("عکس" if chosen["photos"] else "متن")
     print(f"  🎯 انتخاب: {chosen['id']} — {title[:60]}")
+
+    # گاردِ تصویری: اگر روی عکس «درست/تأییدشده» خورده باشد، شایعه نیست → پخش نکن
+    if chosen["photos"] and looks_true_in_image(chosen["photos"][0]):
+        print("  🛑 این مورد روی تصویرش «درست/تأییدشده» خورده، نه شایعه؛ پخش نمی‌شود.")
+        posted.append(chosen["id"])
+        state["posted_ids"] = posted[-3000:]
+        save_state(state)
+        return
+
     mid = publish(title, why, chosen)
     if mid:
         post_backup(chosen, model_label, mid, mode)
