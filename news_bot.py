@@ -43,10 +43,18 @@ DOWNLOAD_CAP    = 120 * 1024 * 1024    # سقفِ دانلودِ ویدیو بر
 # ===================== ثابت‌ها =====================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
+GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")   # اگر خالی باشد، خودکار از GitHub Models استفاده می‌شود
 
-AI_MODEL       = "openai/gpt-4.1"      # هم متن، هم دیدِ تصویری
-AI_MODEL_CHAIN = [AI_MODEL, "openai/gpt-4o", "openai/gpt-4o-mini"]
-AI_ENDPOINT    = "https://models.github.ai/inference/chat/completions"
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GITHUB_ENDPOINT = "https://models.github.ai/inference/chat/completions"
+# زنجیره: اول بهترین، بعد فالبک‌ها — (provider, model)
+AI_CHAIN = [
+    ("gemini", "gemini-2.5-pro"),
+    ("gemini", "gemini-2.5-flash"),
+    ("github", "openai/gpt-4.1"),
+    ("github", "openai/gpt-4o"),
+    ("github", "openai/gpt-4o-mini"),
+]
 
 STATE_FILE = "seen.json"
 TEHRAN     = timezone(timedelta(hours=3, minutes=30))
@@ -137,26 +145,28 @@ def looks_like_factcheck(text):
 
 # ===================== هوش مصنوعی =====================
 def _call_ai(messages, temperature=0.5):
-    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
-    for m in AI_MODEL_CHAIN:
+    for provider, model in AI_CHAIN:
+        endpoint = GEMINI_ENDPOINT if provider == "gemini" else GITHUB_ENDPOINT
+        key = GEMINI_API_KEY if provider == "gemini" else GITHUB_TOKEN
+        if not key:                      # کلیدِ این ارائه‌دهنده نیست → ردش کن
+            continue
         try:
-            payload = {"model": m, "messages": messages}
-            if not m.startswith("openai/gpt-5"):
-                payload["temperature"] = temperature
-            resp = requests.post(AI_ENDPOINT, headers=headers, timeout=90, json=payload)
+            resp = requests.post(
+                endpoint, timeout=120,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": messages, "temperature": temperature})
             if resp.status_code == 429:
-                print(f"  ⏳ سقفِ {m} پر است؛ مدلِ بعدی...")
+                print(f"  ⏳ سقفِ {provider}:{model} پر است؛ مدلِ بعدی...")
                 continue
             resp.raise_for_status()
             txt = resp.json()["choices"][0]["message"]["content"].strip()
             if txt:
-                if m != AI_MODEL:
-                    print(f"  (با مدلِ پشتیبان: {m})")
-                return txt, m
+                print(f"  🤖 مدل: {provider}:{model}")
+                return txt, f"{provider}:{model}"
         except Exception as e:
-            print(f"  ⚠️ خطای مدلِ {m}:", e)
+            print(f"  ⚠️ خطای {provider}:{model}:", e)
             continue
-    return None, AI_MODEL_CHAIN[-1]
+    return None, "none"
 
 
 def ai_select_and_write(cands):
